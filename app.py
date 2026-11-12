@@ -1,17 +1,18 @@
 """
 Bobby Stock Price Prediction Demo
 =================================
-Compares the annual trading performance of three simulated investors ($100,000 budget,
+Compares the annual trading performance of three simulated investors (USD 100,000 budget,
 trading on the first trading day of each week over the most recent 365 calendar days):
   1. Investor 1 (SMA Crossover): Short MA = 5, Long MA = 20 on 1-day timeframe
-     using only the most recent 365 calendar days of data.
+     using only the most recent 365 calendar days of data, with Win/Loss explanation.
   2. Investor 2 (ML Linear Regression): Trained on the past 4 years of data (excluding
      the most recent 365 calendar days) mapping 5-day past daily price movements to the
-     next 5-day average price movement; tested on the most recent 365 calendar days.
+     next 5-day average price movement; tested on the most recent 365 calendar days,
+     with Win/Loss explanation.
   3. Investor 3 (CNN Graphical Analysis): Generates 5-day Candlestick chart images
      labeled with "Buy" / "Sell" and the absolute effect size of the next 5-day average
      price movement. Trained on the past 4 years of data and simulated on the most
-     recent 365 calendar days.
+     recent 365 calendar days, with Win/Loss explanation, hyperparameters, and parameter count.
 """
 
 from datetime import timedelta
@@ -207,14 +208,14 @@ def execute_weekly_simulation(
                         "Date": dt.strftime("%Y-%m-%d"),
                         "Weekday": dt.strftime("%A"),
                         "Action": action_taken,
-                        "Close Price ($)": round(price, 2),
+                        "Close Price (USD)": round(price, 2),
                         "Signal Criticality (%)": round(crit * 100, 1),
                         "Allocation (%)": round(alloc_fraction * 100, 1),
                         "Shares Traded": round(traded_shares, 4),
-                        "Trade Value ($)": round(trade_value, 2),
-                        "Cash After ($)": round(cash, 2),
-                        "Stock Value After ($)": round(shares * price, 2),
-                        "Total Worth ($)": round(cash + shares * price, 2),
+                        "Trade Value (USD)": round(trade_value, 2),
+                        "Cash After (USD)": round(cash, 2),
+                        "Stock Value After (USD)": round(shares * price, 2),
+                        "Total Worth (USD)": round(cash + shares * price, 2),
                         "_is_win": bool(is_win),
                     }
                 )
@@ -280,6 +281,7 @@ def run_sma_strategy(test_df: pd.DataFrame, short_window: int = 5, long_window: 
     Short MA = 5, Long MA = 20 (1-day timeframe).
     Buy when SMA_5 crosses above SMA_20 (Golden Cross);
     Sell when SMA_5 crosses below SMA_20 (Death Cross).
+    Generates a comprehensive Win/Loss explanation at the end.
     """
     sma_df = test_df.copy()
     sma_df["SMA_Short"] = sma_df["Close"].rolling(window=short_window, min_periods=short_window).mean()
@@ -290,11 +292,16 @@ def run_sma_strategy(test_df: pd.DataFrame, short_window: int = 5, long_window: 
     valid_spreads = sma_df["SpreadPct"].dropna().values
     scale_denom = float(np.percentile(valid_spreads, 90)) if len(valid_spreads) > 0 else 0.02
     scale_denom = max(scale_denom, 1e-4)
+    avg_spread_pct = float(np.mean(valid_spreads) * 100.0) if len(valid_spreads) > 0 else 0.0
 
     signals = []
     criticalities = []
     prev_regime = 0
     crossover_in_week = 0
+    golden_crosses = 0
+    death_crosses = 0
+    bullish_days = 0
+    bearish_days = 0
 
     sma_s_vals = sma_df["SMA_Short"].values
     sma_l_vals = sma_df["SMA_Long"].values
@@ -308,8 +315,17 @@ def run_sma_strategy(test_df: pd.DataFrame, short_window: int = 5, long_window: 
             continue
 
         curr_regime = 1 if sma_s_vals[i] > sma_l_vals[i] else -1
+        if curr_regime > 0:
+            bullish_days += 1
+        else:
+            bearish_days += 1
+
         if prev_regime != 0 and curr_regime != prev_regime:
             crossover_in_week = curr_regime
+            if curr_regime > 0:
+                golden_crosses += 1
+            else:
+                death_crosses += 1
         prev_regime = curr_regime
 
         if bool(is_first_vals[i]):
@@ -329,9 +345,62 @@ def run_sma_strategy(test_df: pd.DataFrame, short_window: int = 5, long_window: 
         sma_df,
         signals,
         criticalities,
-        investor_name="Investor 1: SMA Crossover (5/20)",
+        investor_name=f"Investor 1: SMA Crossover ({short_window}/{long_window})",
     )
-    sim_result["sma_df"] = sma_df
+
+    active_days = max(1, bullish_days + bearish_days)
+    bullish_pct = (bullish_days / active_days) * 100.0
+    bearish_pct = (bearish_days / active_days) * 100.0
+    outcome_word = (
+        "outperformed the initial budget (WIN)"
+        if sim_result["growth_usd"] >= 0
+        else "finished below the initial budget (LOSS)"
+    )
+
+    explanation = (
+        f"**Win/Loss Outcome**: Investor 1 (SMA Crossover {short_window}/{long_window}) achieved a final portfolio worth of "
+        f"**USD {sim_result['final_worth']:,.2f}** ({sim_result['growth_pct']:+.2f}% vs. the USD 100,000.00 budget; "
+        f"Cash: **USD {sim_result['final_cash']:,.2f}**, Stock: **USD {sim_result['final_stock_value']:,.2f}**), "
+        f"meaning the strategy **{outcome_word}** over the most recent 365 calendar days.\n\n"
+        f"**Why It Won/Lost (Golden Cross & Death Cross Analysis)**:\n"
+        f"1. **Crossover Signal Frequency & Market Regime**: Using only the daily stock data within the most recent 365 calendar days "
+        f"(after the initial {long_window}-day warm-up window), the {short_window}-day Short SMA and {long_window}-day Long SMA triggered "
+        f"**{golden_crosses} Golden Cross(es)** (Buy regime shifts) and **{death_crosses} Death Cross(es)** (Sell regime shifts). "
+        f"The stock spent **{bullish_pct:.1f}%** ({bullish_days} days) in a bullish regime (`SMA_{short_window} > SMA_{long_window}`) "
+        f"and **{bearish_pct:.1f}%** ({bearish_days} days) in a bearish regime (`SMA_{short_window} <= SMA_{long_window}`).\n"
+        f"2. **Weekly Trade Execution & Win Rate**: Trading strictly on the first trading day of each week, Investor 1 executed "
+        f"**{sim_result['num_trades']} weekly trades** ({sim_result['buy_trades']} Buys, {sim_result['sell_trades']} Sells), achieving a "
+        f"**{sim_result['win_rate_pct']:.1f}% 5-day forward win rate** with a maximum portfolio drawdown of **{sim_result['max_drawdown_pct']:.2f}%**.\n"
+        f"3. **Signal Criticality & Moving-Average Lag Effect**: Trade volume scaled dynamically with the normalized SMA divergence "
+        f"(`|SMA_{short_window} - SMA_{long_window}| / Close`, averaging **{avg_spread_pct:.2f}%**). When the stock established sustained multi-week trends, "
+        f"wider SMA separation increased position sizes and captured trend continuation; however, because moving averages are backward-looking indicators, "
+        f"crossovers inherently lag sharp V-shaped reversals and can experience whipsaw trades during sideways consolidation."
+    )
+
+    sma_metrics = [
+        {"Metric": "Short MA / Long MA Lengths", "Value": f"{short_window} Days / {long_window} Days (1D Timeframe)"},
+        {"Metric": "Training Data Window", "Value": "None (Uses Most Recent 365 Calendar Days Only)"},
+        {"Metric": "Golden Crosses (Bullish Crossovers)", "Value": f"{golden_crosses} event(s)"},
+        {"Metric": "Death Crosses (Bearish Crossovers)", "Value": f"{death_crosses} event(s)"},
+        {"Metric": "Bullish vs. Bearish Regime Share", "Value": f"{bullish_pct:.1f}% Bullish ({bullish_days}d) / {bearish_pct:.1f}% Bearish ({bearish_days}d)"},
+        {"Metric": "Mean |SMA_Short - SMA_Long| Spread", "Value": f"{avg_spread_pct:.2f}% of Close Price"},
+        {"Metric": "Weekly Trades & 5-Day Win Rate", "Value": f"{sim_result['num_trades']} trades ({sim_result['buy_trades']}B / {sim_result['sell_trades']}S) | {sim_result['win_rate_pct']:.1f}% Win Rate"},
+        {"Metric": "Max Portfolio Drawdown", "Value": f"{sim_result['max_drawdown_pct']:.2f}%"},
+    ]
+
+    sim_result.update(
+        {
+            "sma_df": sma_df,
+            "golden_crosses": golden_crosses,
+            "death_crosses": death_crosses,
+            "bullish_days": bullish_days,
+            "bearish_days": bearish_days,
+            "bullish_pct": bullish_pct,
+            "avg_spread_pct": avg_spread_pct,
+            "sma_metrics": sma_metrics,
+            "explanation": explanation,
+        }
+    )
     return sim_result
 
 
@@ -396,7 +465,6 @@ def run_linear_regression_strategy(df: pd.DataFrame, cutoff_date: pd.Timestamp):
     p90_effect = float(np.percentile(np.abs(y_train_pred), 90)) if len(y_train_pred) > 0 else 0.01
     p90_effect = max(p90_effect, 1e-4)
 
-    # Evaluate across all rows in test_df using positional indices
     test_df = df[df.index > cutoff_date].copy()
     test_start_pos = len(df) - len(test_df)
     closes = df["Close"].values.astype(float)
@@ -448,22 +516,24 @@ def run_linear_regression_strategy(df: pd.DataFrame, cutoff_date: pd.Timestamp):
         else "finished below the initial budget (LOSS)"
     )
 
+    # Note: Uses 'USD' and Unicode symbols instead of '$' so Streamlit Markdown never misinterprets currency as LaTeX math
     explanation = (
         f"**Win/Loss Outcome**: Investor 2 (ML Linear Regression) achieved a final portfolio worth of "
-        f"**${sim_result['final_worth']:,.2f}** ({sim_result['growth_pct']:+.2f}% vs. the $100,000 budget), "
+        f"**USD {sim_result['final_worth']:,.2f}** ({sim_result['growth_pct']:+.2f}% vs. the USD 100,000.00 budget; "
+        f"Cash: **USD {sim_result['final_cash']:,.2f}**, Stock: **USD {sim_result['final_stock_value']:,.2f}**), "
         f"meaning the strategy **{outcome_word}** over the most recent 365 calendar days.\n\n"
         f"**Why It Won/Lost**:\n"
         f"1. **Learned Linear Dynamics ({regime_type})**: Trained on {len(X_train):,} 5-day historical windows "
         f"from the prior 4 years, the model learned weights "
-        f"$\\beta_1={coefs[0]:+.4f}, \\beta_2={coefs[1]:+.4f}, \\beta_3={coefs[2]:+.4f}, "
-        f"\\beta_4={coefs[3]:+.4f}, \\beta_5={coefs[4]:+.4f}$ with intercept $\\beta_0={intercept:+.5f}$. "
+        f"`β₁ = {coefs[0]:+.4f}`, `β₂ = {coefs[1]:+.4f}`, `β₃ = {coefs[2]:+.4f}`, "
+        f"`β₄ = {coefs[3]:+.4f}`, `β₅ = {coefs[4]:+.4f}` with intercept `β₀ = {intercept:+.5f}`. "
         f"Day-{dominant_lag} price movement had the largest influence on predicted 5-day forward returns.\n"
         f"2. **Out-of-Sample Signal Quality**: Across the recent test year, the linear model achieved a "
-        f"**{dir_acc:.1f}% directional hit rate** ($R^2 = {r2_val:.4f}$, $\\text{{RMSE}} = {rmse_val:.4f}$) "
+        f"**{dir_acc:.1f}% directional hit rate** (`R² = {r2_val:.4f}`, `RMSE = {rmse_val:.4f}`) "
         f"and a **{sim_result['win_rate_pct']:.1f}% weekly trade win rate** across {sim_result['num_trades']} executed weekly trades "
         f"({sim_result['buy_trades']} Buys, {sim_result['sell_trades']} Sells).\n"
         f"3. **Criticality Sizing Effect**: Because Linear Regression projects expected return linearly from past 5-day returns, "
-        f"large single-week spikes amplified predicted effect sizes ($|\\hat{{y}}|$), scaling position sizes up to "
+        f"large single-week spikes amplified predicted effect sizes (`|ŷ|`), scaling position sizes up to "
         f"high criticality on sharp moves. In trending weeks this compounded gains, while in choppy/sideways weeks "
         f"linear extrapolation suffered from mean-reversion whipsaws."
     )
@@ -556,8 +626,6 @@ def run_cnn_strategy(
     Trains a 2D Convolutional Neural Network on 4 years of 5-day Candlestick chart images
     labeled with Buy/Sell and absolute effect size, then simulates weekly trades over the
     most recent 365 calendar days.
-    Uses a concatenated 2-column output tensor [prob_buy, effect_size] so Keras 2 and Keras 3
-    compile/fit/predict work with a single standard NumPy array (avoiding multi-output KeyError: 0).
     """
     images, labels_buy, effect_sizes, y_raw, dates_idx, ohlc_windows = build_cnn_dataset(
         df, img_size=img_size
@@ -589,7 +657,6 @@ def run_cnn_strategy(
     ]
     total_params = sum(item["Parameters"] for item in layer_params)
 
-    # Pre-render all test_df 5-day candlestick images for fast single-batch inference
     test_df = df[df.index > cutoff_date].copy()
     test_start_pos = len(df) - len(test_df)
     eval_imgs = []
@@ -716,15 +783,17 @@ def run_cnn_strategy(
             }
         )
 
+    # Note: Uses 'USD' and Unicode symbols instead of '$' so Streamlit Markdown never misinterprets currency as LaTeX math
     explanation = (
         f"**Win/Loss Outcome**: Investor 3 (CNN Graphical Analysis) reached a final worth of "
-        f"**${sim_result['final_worth']:,.2f}** ({sim_result['growth_pct']:+.2f}% vs. the $100,000 budget), "
+        f"**USD {sim_result['final_worth']:,.2f}** ({sim_result['growth_pct']:+.2f}% vs. the USD 100,000.00 budget; "
+        f"Cash: **USD {sim_result['final_cash']:,.2f}**, Stock: **USD {sim_result['final_stock_value']:,.2f}**), "
         f"meaning the CNN graphical investor **{outcome_word}** over the most recent 365 calendar days.\n\n"
         f"**Why It Won/Lost (Visual Pattern & Effect-Size Analysis)**:\n"
         f"1. **Candlestick Spatial Feature Extraction**: Unlike Linear Regression (which only sees close-to-close returns), "
         f"the CNN inspects 5-day OHLC candlestick geometry—capturing intraday high/low wicks, body-to-wick ratios, "
         f"bullish/bearish engulfing structures, and 5-day exhaustion wicks. Across {len(X_img_train):,} training images from the prior 4 years, "
-        f"samples were labeled with **Buy/Sell** and weighted by the **absolute effect size** ($|\\Delta P_{{+5d}}|$).\n"
+        f"samples were labeled with **Buy/Sell** and weighted by the **absolute effect size** (`|ΔP(+5d)|`).\n"
         f"2. **Out-of-Sample Accuracy & Trade Execution**: On the recent 365-day test window, the CNN achieved "
         f"**{cls_acc:.1f}% classification accuracy** on 5-day candlestick patterns (Effect-Size MAE = {eff_mae*100:.2f}%) "
         f"and a **{sim_result['win_rate_pct']:.1f}% weekly trade win rate** across {sim_result['num_trades']} weekly trades "
@@ -760,10 +829,10 @@ def main():
     st.title("📈 Bobby Stock Price Prediction Demo")
     st.markdown(
         """
-        **Comparing Three Weekly Trading Investors ($100,000 Initial Budget | Most Recent 365 Calendar Days):**
-        * **Investor 1 — SMA Crossover Strategy (`Short MA = 5`, `Long MA = 20`)**: Uses daily stock data within the most recent 365 calendar days. Buys on Golden Cross and sells on Death Cross.
-        * **Investor 2 — ML Linear Regression**: Trained on the **past 4 years** of daily data (5-day past price movement $\\rightarrow$ next 5-day average price movement) and simulated on the **most recent 365 calendar days**.
-        * **Investor 3 — CNN Graphical Analysis**: Generates **5-day Candlestick charts** labeled with `"Buy"` / `"Sell"` and the **absolute effect size** of the next 5-day average movement. Trained on the **past 4 years** and simulated on the **most recent 365 calendar days**.
+        **Comparing Three Weekly Trading Investors (USD 100,000 Initial Budget | Most Recent 365 Calendar Days):**
+        * **Investor 1 — SMA Crossover Strategy (`Short MA = 5`, `Long MA = 20`)**: Uses daily stock data within the most recent 365 calendar days. Buys on Golden Cross and sells on Death Cross, with Win/Loss explanation.
+        * **Investor 2 — ML Linear Regression**: Trained on the **past 4 years** of daily data (5-day past price movement → next 5-day average price movement) and simulated on the **most recent 365 calendar days**, with Win/Loss explanation.
+        * **Investor 3 — CNN Graphical Analysis**: Generates **5-day Candlestick charts** labeled with `"Buy"` / `"Sell"` and the **absolute effect size** of the next 5-day average movement. Trained on the **past 4 years** and simulated on the **most recent 365 calendar days**, with Win/Loss explanation, hyperparameters, and parameter count.
         """
     )
 
@@ -842,11 +911,11 @@ def main():
         with col:
             st.metric(
                 label=inv["investor"],
-                value=f"${inv['final_worth']:,.2f}",
-                delta=f"{inv['growth_pct']:+.2f}% (${inv['growth_usd']:+,.2f})",
+                value=f"USD {inv['final_worth']:,.2f}",
+                delta=f"{inv['growth_pct']:+.2f}% (USD {inv['growth_usd']:+,.2f})",
             )
             st.caption(
-                f"Cash: **${inv['final_cash']:,.2f}** | Stock: **${inv['final_stock_value']:,.2f}** | "
+                f"Cash: **USD {inv['final_cash']:,.2f}** | Stock: **USD {inv['final_stock_value']:,.2f}** | "
                 f"Trades: **{inv['num_trades']}** (Win Rate: **{inv['win_rate_pct']:.1f}%**)"
             )
 
@@ -856,7 +925,7 @@ def main():
         go.Scatter(
             x=sma_res["history"].index,
             y=sma_res["history"]["TotalWorth"],
-            name="Investor 1: SMA Crossover (5/20)",
+            name=sma_res["investor"],
             line=dict(color="#10b981", width=2.5),
         )
     )
@@ -880,12 +949,12 @@ def main():
         y=INITIAL_BUDGET,
         line_dash="dash",
         line_color="#94a3b8",
-        annotation_text="Initial Budget ($100,000)",
+        annotation_text="Initial Budget (USD 100,000)",
     )
     fig_worth.update_layout(
         height=420,
         xaxis_title="Date (Most Recent 365 Calendar Days)",
-        yaxis_title="Total Portfolio Worth (USD $)",
+        yaxis_title="Total Portfolio Worth (USD)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=20, r=20, t=40, b=20),
     )
@@ -896,11 +965,11 @@ def main():
         [
             {
                 "Investor Strategy": inv["investor"],
-                "Initial Budget ($)": f"${INITIAL_BUDGET:,.2f}",
-                "Final Cash ($)": f"${inv['final_cash']:,.2f}",
-                "Final Stock Holdings ($)": f"${inv['final_stock_value']:,.2f}",
-                "Final Total Worth ($)": f"${inv['final_worth']:,.2f}",
-                "Net Profit / Loss ($)": f"${inv['growth_usd']:+,.2f}",
+                "Initial Budget (USD)": f"USD {INITIAL_BUDGET:,.2f}",
+                "Final Cash (USD)": f"USD {inv['final_cash']:,.2f}",
+                "Final Stock Holdings (USD)": f"USD {inv['final_stock_value']:,.2f}",
+                "Final Total Worth (USD)": f"USD {inv['final_worth']:,.2f}",
+                "Net Profit / Loss (USD)": f"USD {inv['growth_usd']:+,.2f}",
                 "Annual Growth (%)": f"{inv['growth_pct']:+.2f}%",
                 "Weekly Trades Executed": f"{inv['num_trades']} ({inv['buy_trades']}B / {inv['sell_trades']}S)",
                 "5-Day Forward Win Rate": f"{inv['win_rate_pct']:.1f}%",
@@ -913,7 +982,7 @@ def main():
 
     tab_sma, tab_lr, tab_cnn, tab_logs = st.tabs(
         [
-            "1️⃣ SMA Crossover (5/20)",
+            "1️⃣ SMA Crossover + Win/Loss Explanation",
             "2️⃣ ML Linear Regression + Win/Loss Explanation",
             "3️⃣ CNN Graphical Analysis + Hyperparameters",
             "📋 Weekly Trade Logs",
@@ -921,14 +990,25 @@ def main():
     )
 
     with tab_sma:
-        st.markdown("### Investor 1: SMA Crossover Strategy (`Short MA = 5`, `Long MA = 20`)")
-        sma_df = sma_res["sma_df"]
-        fig_sma = go.Figure()
-        fig_sma.add_trace(go.Scatter(x=sma_df.index, y=sma_df["Close"], name="Close Price", line=dict(color="#64748b", width=1.5)))
-        fig_sma.add_trace(go.Scatter(x=sma_df.index, y=sma_df["SMA_Short"], name=f"Short SMA ({sma_short}d)", line=dict(color="#10b981", width=2)))
-        fig_sma.add_trace(go.Scatter(x=sma_df.index, y=sma_df["SMA_Long"], name=f"Long SMA ({sma_long}d)", line=dict(color="#f59e0b", width=2)))
-        fig_sma.update_layout(height=380, margin=dict(l=20, r=20, t=30, b=20))
-        st.plotly_chart(fig_sma, use_container_width=True)
+        st.markdown(f"### Investor 1: SMA Crossover Strategy (`Short MA = {sma_short}`, `Long MA = {sma_long}`) & Win/Loss Explanation")
+        st.markdown(sma_res["explanation"])
+
+        sma_c1, sma_c2 = st.columns([1.3, 1.0])
+        with sma_c1:
+            sma_df = sma_res["sma_df"]
+            fig_sma = go.Figure()
+            fig_sma.add_trace(go.Scatter(x=sma_df.index, y=sma_df["Close"], name="Close Price", line=dict(color="#64748b", width=1.5)))
+            fig_sma.add_trace(go.Scatter(x=sma_df.index, y=sma_df["SMA_Short"], name=f"Short SMA ({sma_short}d)", line=dict(color="#10b981", width=2)))
+            fig_sma.add_trace(go.Scatter(x=sma_df.index, y=sma_df["SMA_Long"], name=f"Long SMA ({sma_long}d)", line=dict(color="#f59e0b", width=2)))
+            fig_sma.update_layout(
+                title="Recent 365-Day Close Price vs. Short & Long SMA",
+                height=360,
+                margin=dict(l=20, r=20, t=40, b=20),
+            )
+            st.plotly_chart(fig_sma, use_container_width=True)
+        with sma_c2:
+            st.markdown("#### SMA Crossover Signal Diagnostics")
+            st.dataframe(pd.DataFrame(sma_res["sma_metrics"]), use_container_width=True, hide_index=True)
 
     with tab_lr:
         st.markdown("### Investor 2: ML Linear Regression Strategy & Win/Loss Explanation")
